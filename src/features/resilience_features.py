@@ -6,7 +6,7 @@ def main():
     ...
 
 
-def filter_data():
+def filter_lab_data():
     """Could return a list of tuples: {name, df} to help keep track of all the metrics"""
 
     labs = pd.read_csv("./data/processed/resilience_metrics.csv", header=0)
@@ -46,6 +46,29 @@ def filter_data():
     pot = pot[pot["RAW_UNIT"].astype(str).str.contains("mmol/L", case=False, na=False)]
 
     return [("hba1c", hba1c), ("glucose", glucose), ("agap", agap), ("creatinine", creat), ("potassium", pot), ("uacr", uacr)]
+
+def filter_druglist():
+    """same type of tuple returned (name, df)"""
+
+    drugs = pd.read_csv("./data/processed/confounding_drugs_external.csv", header=0)
+    na_mask = (drugs["RX_START_DATE_OFFSET"].isna()) | (drugs["RX_ORDER_DATE_OFFSET"].isna())
+    drugs = drugs[~na_mask]
+    # if end date offset is NA, use date of EHR download in place
+    drug_starts = pd.to_datetime(drugs["RX_START_DATE_OFFSET"])
+    drug_ends = pd.to_datetime(drugs["RX_END_DATE_OFFSET"])
+    drugs["DRUG_DURATION"] = (drug_starts - drug_ends).dt.days
+
+    lisinopril = drugs[drugs["RAW_RX_MED_NAME"].str.contains("lisinopril", case=False, na=False)].copy()
+    losartan = drugs[drugs['RAW_RX_MED_NAME'].str.contains("losartan", case=False, na=False)].copy()
+    metformin = drugs[drugs["RAW_RX_MED_NAME"].str.contains("metformin", case=False, na=False)].copy()
+    ozempic = drugs[drugs["RAW_RX_MED_NAME"].str.contains("ozempic", case=False, na=False)].copy()
+    cgm = drugs[drugs["RAW_RX_MED_NAME"].str.contains("CGM|DEXCOM|GLUCOSE MONITOR", case=False, na=False)].copy()
+    insulin_pump = drugs[drugs["RAW_RX_MED_NAME"].str.contains("PUMP|OMNIPOD|TANDEM", case=False, na=False)].copy()
+    steroids = drugs[drugs["RAW_RX_MED_NAME"].str.contains("prednisone|dexamethasone|hydrocortisone", case=False, na=False)].copy()
+    immunosuppressants = drugs[drugs["RAW_RX_MED_NAME"].str.contains("tacrolimus|cyclosporine|methotrexate", case=False, na=False)].copy()
+
+    lisinopril = lisinopril[lisinopril["DRUG_DURATION"] > 7]
+    
 
 def create_features():
     """What the ML model actually sees needs to be tailored very carefully. We want it to discover resiliency features, not predict resilience USING resilience"""
