@@ -11,7 +11,7 @@ def filter_lab_data():
 
     labs = pd.read_csv("./data/processed/resilience_metrics.csv", header=0)
     labs["RESULT_NUM_CLEAN"] = labs["RESULT_NUM"].astype(str).str.extract(r'(\d+\.?\d*)')[0].astype(float)
-    na_mask = labs["RESULT_NUM_CLEAN"].isna()
+    na_mask = (labs["RESULT_NUM_CLEAN"].isna() | labs["RESULT_NUM_CLEAN"] == "NI")
     labs = labs[~na_mask]
     # labs taken at POC or "bedside" indicate some type of hospitalization event occurring
     labs["POC_LAB"] = (labs["RAW_LAB_NAME"].str.contains("POC|bedside|point of care", case=False, na=False)).astype(int)
@@ -45,18 +45,18 @@ def filter_lab_data():
     #potassium filters
     pot = pot[pot["RAW_UNIT"].astype(str).str.contains("mmol/L", case=False, na=False)]
 
-    return [("hba1c", hba1c), ("glucose", glucose), ("agap", agap), ("creatinine", creat), ("potassium", pot), ("uacr", uacr)]
+    return [("labs", labs), ("hba1c", hba1c), ("glucose", glucose), ("agap", agap), ("creatinine", creat), ("potassium", pot), ("uacr", uacr)]
 
 def filter_druglist():
     """same type of tuple returned (name, df)"""
 
     drugs = pd.read_csv("./data/processed/confounding_drugs_external.csv", header=0)
-    na_mask = (drugs["RX_START_DATE_OFFSET"].isna()) | (drugs["RX_ORDER_DATE_OFFSET"].isna())
+    na_mask = (drugs["RX_START_DATE_OFFSET"].isna()) | (drugs["RX_ORDER_DATE_OFFSET"].isna()) | (drugs["RX_START_DATE_OFFSET"] == "NI") | (drugs["RX_ORDER_DATE_OFFSET"] == "NI")
     drugs = drugs[~na_mask]
     # if end date offset is NA, use date of EHR download in place
-    drug_starts = pd.to_datetime(drugs["RX_START_DATE_OFFSET"])
-    drug_ends = pd.to_datetime(drugs["RX_END_DATE_OFFSET"])
-    drugs["DRUG_DURATION"] = (drug_starts - drug_ends).dt.days
+    drug_starts = pd.to_datetime(drugs["RX_START_DATE_OFFSET"], errors="coerce")
+    drug_ends = pd.to_datetime(drugs["RX_END_DATE_OFFSET"], errors="coerce")
+    drugs["DRUG_DURATION"] = (drug_ends - drug_starts).dt.days
 
     lisinopril = drugs[drugs["RAW_RX_MED_NAME"].str.contains("lisinopril", case=False, na=False)].copy()
     losartan = drugs[drugs['RAW_RX_MED_NAME'].str.contains("losartan", case=False, na=False)].copy()
@@ -68,7 +68,53 @@ def filter_druglist():
     immunosuppressants = drugs[drugs["RAW_RX_MED_NAME"].str.contains("tacrolimus|cyclosporine|methotrexate", case=False, na=False)].copy()
 
     lisinopril = lisinopril[lisinopril["DRUG_DURATION"] > 7]
-    
+    losartan = losartan[losartan["DRUG_DURATION"] > 7]
+    metformin = metformin[metformin["DRUG_DURATION"] > 30]
+    ozempic = ozempic[ozempic["DRUG_DURATION"] > 30]
+    # to really gain an advantage from cgm or pump use, needs to be a longer period
+    cgm = cgm[cgm["DRUG_DURATION"] > 90]
+    insulin_pump = insulin_pump[insulin_pump["DRUG_DURATION"] > 90]
+    immunosuppressants = immunosuppressants[immunosuppressants["DRUG_DURATION"] > 7]
+
+    return [("drugs", drugs), ("lisinopril", lisinopril), ("losartan", losartan), ("metformin", metformin), ("ozempic", ozempic), ("cgm", cgm), ("pump", insulin_pump), ("immuno", immunosuppressants)]
+
+def filter_vitals():
+    reader = pd.read_csv("./data/processed/vitals.csv", header=0, chunksize=500000)
+    chunks = []
+    for i, chunk in enumerate(reader):
+        chunks.append(chunk)
+        if (i%30 == 0):
+            print(f"Filtered chunk {i} of vitals.csv \n")
+    vitals = pd.concat(chunks, ignore_index=True)
+
+    vitals_mask = (((vitals["DIASTOLIC"].isna() | vitals["DIASTOLIC"] == "NI") |
+                   (vitals["SYSTOLIC"].isna() | vitals["SYSTOLIC"] == "NI")) & 
+                   (vitals["ORIGINAL_BMI"].isna() | vitals["ORIGINAL_BMI"] == "NI") &
+                   (vitals["SMOKING"].isna() | vitals["SMOKING"] == "NI") &
+                   (vitals["TOBACCO"].isna() | vitals["TOBACCO"] == "NI"))
+    vitals = vitals[~vitals_mask]
+
+    hypertension = vitals[(vitals["SYSTOLIC"].astype(float) > 140) | (vitals["DIASTOLIC"].astype(float) > 90)]
+    emergency_vitals = vitals[(vitals["SYSTOLIC"].astype(float) > 180) | (vitals["DIASTOLIC"].astype(float) > 120)]
+    obesity = vitals[vitals["ORIGINAL_BMI"].astype(float) > 30]
+    smoker = vitals[(vitals["SMOKING"].astype(int) == 1) | (vitals["TOBACCO"].astype(int) == 1)]
+
+    return [("hypertension", hypertension), ("er_vitals", emergency_vitals), ("obesity", obesity), ("smoker", smoker)]
+
+def filter_procedures():
+    reader = pd.read_csv("./data/processed/procedures.csv", header=0, chunksize=500000)
+    chunks = []
+    for i, chunk in enumerate(reader):
+        chunks.append(chunk)
+        if (i%30 == 0):
+            print(f"Filtered chunk {i} of procedures.csv \n")
+    procedures = pd.concat(chunks, ignore_index=True)
+
+    procedures_mask = procedures[(procedures["PX"].isna()) | (procedures["PX"] == "NI") | (procedures["PX_DATE_OFFSET"].isna())]
+    procedures = [~procedures_mask]
+
+    # on_cgm = procedures[]
+
 
 def create_features():
     """What the ML model actually sees needs to be tailored very carefully. We want it to discover resiliency features, not predict resilience USING resilience"""
