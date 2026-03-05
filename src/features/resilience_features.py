@@ -24,8 +24,8 @@ def filter_lab_data():
 
     # bedside_glucose = blood_glucose[blood_glucose["raw_lab_name"].str.contains("bedside|POC", case=False, na=False)]
     
+    print("Applying lab filters \n")
     #HBA1C filters
-    # Apply Range Filter (2-20%)
     hba1c = hba1c[(hba1c["RESULT_NUM_CLEAN"] >= 2) & (hba1c["RESULT_NUM_CLEAN"] <= 20)]
 
     #Glucose filters
@@ -48,6 +48,20 @@ def filter_lab_data():
     return [("labs", labs), ("hba1c", hba1c), ("glucose", glucose), 
             ("agap", agap), ("creatinine", creat), ("potassium", pot), ("uacr", uacr)]
 
+def group_labs(labs: list[tuple[str, pd.DataFrame]]):
+    """group labs by ID and date to find long-term averages/st. deviations/sums/etc"""
+    hba1c = labs[1][1]
+    glucose = labs[2][1]
+    agap = labs[3][1]
+    creatine = labs[4][1]
+    potassium = labs[5][1]
+    uacr = labs[6][1]
+
+    hba1c["DAILY_MEAN"] = hba1c.groupby(["ID", "SPECIMEN_DATE_OFFSET"])["RAW_RESULT"].mean()
+    glucose["DAILY_MEDIAN"] = glucose.groupby(["ID", "SPECIMEN_DATE_OFFSET"])["RAW_RESULT"].median()
+    glucose["LONGTERM_MEAN"] = ...
+
+
 def filter_druglist():
     """same type of tuple returned (name, df)"""
 
@@ -68,6 +82,7 @@ def filter_druglist():
     steroids = drugs[drugs["RAW_RX_MED_NAME"].str.contains("prednisone|dexamethasone|hydrocortisone", case=False, na=False)].copy()
     immunosuppressants = drugs[drugs["RAW_RX_MED_NAME"].str.contains("tacrolimus|cyclosporine|methotrexate", case=False, na=False)].copy()
 
+    print("Applying med/drug filters \n")
     lisinopril = lisinopril[lisinopril["DRUG_DURATION"] > 7]
     losartan = losartan[losartan["DRUG_DURATION"] > 7]
     metformin = metformin[metformin["DRUG_DURATION"] > 30]
@@ -89,6 +104,7 @@ def filter_vitals():
             print(f"Filtered chunk {i} of vitals.csv \n")
     vitals = pd.concat(chunks, ignore_index=True)
 
+    print("Applying vitals filters \n")
     vitals_mask = (((vitals["DIASTOLIC"].isna() | vitals["DIASTOLIC"] == "NI") |
                    (vitals["SYSTOLIC"].isna() | vitals["SYSTOLIC"] == "NI")) & 
                    (vitals["ORIGINAL_BMI"].isna() | vitals["ORIGINAL_BMI"] == "NI") &
@@ -112,6 +128,7 @@ def filter_procedures():
             print(f"Filtered chunk {i} of procedures.csv \n")
     procedures = pd.concat(chunks, ignore_index=True)
 
+    print("Applying procedures filters \n")
     procedures_mask = procedures[(procedures["PX"].isna()) | (procedures["PX"] == "NI") | (procedures["PX_DATE_OFFSET"].isna())]
     procedures = [~procedures_mask]
 
@@ -144,6 +161,7 @@ def filter_encounters():
             print(f"Filtered chunk {i} of T1D_encounters_clean.csv \n")
     encounters = pd.concat(chunks, ignore_index=True)
 
+    print("Applying encounters filters \n")
     # remove unusable data and "E" for expired (dead) patients
     enc_mask = ((encounters["ADMIT_DATE_OFFSET"].isna()) & (encounters["DISCHARGE_DATE_OFFSET"].isna())) | encounters["DISCHARGE_DISPOSITION" == "E"]
     encounters = encounters[~enc_mask]
