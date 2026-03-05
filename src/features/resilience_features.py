@@ -45,7 +45,8 @@ def filter_lab_data():
     #potassium filters
     pot = pot[pot["RAW_UNIT"].astype(str).str.contains("mmol/L", case=False, na=False)]
 
-    return [("labs", labs), ("hba1c", hba1c), ("glucose", glucose), ("agap", agap), ("creatinine", creat), ("potassium", pot), ("uacr", uacr)]
+    return [("labs", labs), ("hba1c", hba1c), ("glucose", glucose), 
+            ("agap", agap), ("creatinine", creat), ("potassium", pot), ("uacr", uacr)]
 
 def filter_druglist():
     """same type of tuple returned (name, df)"""
@@ -76,7 +77,8 @@ def filter_druglist():
     insulin_pump = insulin_pump[insulin_pump["DRUG_DURATION"] > 90]
     immunosuppressants = immunosuppressants[immunosuppressants["DRUG_DURATION"] > 7]
 
-    return [("drugs", drugs), ("lisinopril", lisinopril), ("losartan", losartan), ("metformin", metformin), ("ozempic", ozempic), ("cgm", cgm), ("pump", insulin_pump), ("immuno", immunosuppressants)]
+    return [("drugs", drugs), ("lisinopril", lisinopril), ("losartan", losartan), ("metformin", metformin), 
+            ("ozempic", ozempic), ("cgm", cgm), ("pump", insulin_pump), ("immuno", immunosuppressants)]
 
 def filter_vitals():
     reader = pd.read_csv("./data/processed/vitals.csv", header=0, chunksize=500000)
@@ -94,10 +96,10 @@ def filter_vitals():
                    (vitals["TOBACCO"].isna() | vitals["TOBACCO"] == "NI"))
     vitals = vitals[~vitals_mask]
 
-    hypertension = vitals[(vitals["SYSTOLIC"].astype(float) > 140) | (vitals["DIASTOLIC"].astype(float) > 90)]
-    emergency_vitals = vitals[(vitals["SYSTOLIC"].astype(float) > 180) | (vitals["DIASTOLIC"].astype(float) > 120)]
-    obesity = vitals[vitals["ORIGINAL_BMI"].astype(float) > 30]
-    smoker = vitals[(vitals["SMOKING"].astype(int) == 1) | (vitals["TOBACCO"].astype(int) == 1)]
+    hypertension = vitals[(vitals["SYSTOLIC"].astype(float) > 140) | (vitals["DIASTOLIC"].astype(float) > 90)].copy()
+    emergency_vitals = vitals[(vitals["SYSTOLIC"].astype(float) > 180) | (vitals["DIASTOLIC"].astype(float) > 120)].copy()
+    obesity = vitals[vitals["ORIGINAL_BMI"].astype(float) > 30].copy()
+    smoker = vitals[(vitals["SMOKING"].astype(int) == 1) | (vitals["TOBACCO"].astype(int) == 1)].copy()
 
     return [("hypertension", hypertension), ("er_vitals", emergency_vitals), ("obesity", obesity), ("smoker", smoker)]
 
@@ -113,7 +115,45 @@ def filter_procedures():
     procedures_mask = procedures[(procedures["PX"].isna()) | (procedures["PX"] == "NI") | (procedures["PX_DATE_OFFSET"].isna())]
     procedures = [~procedures_mask]
 
-    # on_cgm = procedures[]
+    cgm_codes = ['A9276', 'A9277', 'A9278', 'K0553', 'K0554']
+    pump_codes = ['E0784', 'A9274', 'S1034']
+
+    on_cgm = procedures[procedures["PX"].isin(cgm_codes)].copy()
+    on_pump = procedures[procedures["PX"].isin(pump_codes)].copy()  
+
+    # procedures has some useful overlap with encounters that provides more context for emergency visits
+    icu_codes = ['99291', '99292', '31500', '94002', '94003']
+    dialysis_codes = ['90935', '90937', '90945', '90947'] + [str(x) for x in range(90951, 90971)]
+    amputation_codes = ['28820', '28825', '28810', '28805', '28800', '27880', '27881', '27882', '27590', '27591', '27592']
+    retinopathy_codes = ['67228', '67028']
+
+    icu_visits = procedures[procedures["PX"].isin(icu_codes)].copy()
+    dialysis = procedures[procedures["PX"].isin(dialysis_codes)].copy()
+    amputations = procedures[procedures["PX"].isin(amputation_codes)].copy()
+    retinopathy_surgery = procedures[procedures["PX"].isin(retinopathy_codes)].copy()
+    
+    return [("procedures", procedures), ("cgm", on_cgm), ("pump", on_pump), ("icu", icu_visits),
+            ("dialysis", dialysis), ("amputations", amputations), ("retinopathy", retinopathy_surgery)]
+
+def filter_encounters():
+    reader = pd.read_csv("./data/processed/T1D_encounters_clean.csv", header=0, chunksize=500000)
+    chunks = []
+    for i, chunk in enumerate(reader):
+        chunks.append(chunk)
+        if (i%30 == 0):
+            print(f"Filtered chunk {i} of T1D_encounters_clean.csv \n")
+    encounters = pd.concat(chunks, ignore_index=True)
+
+    # remove unusable data and "E" for expired (dead) patients
+    enc_mask = ((encounters["ADMIT_DATE_OFFSET"].isna()) & (encounters["DISCHARGE_DATE_OFFSET"].isna())) | encounters["DISCHARGE_DISPOSITION" == "E"]
+    encounters = encounters[~enc_mask]
+
+    er_visit = encounters[encounters["ENC_TYPE"].str.contains("ED", case=False, na=False)].copy()
+    inpatient_visit = encounters[encounters["ENC_TYPE"].str.contains("EI|IP", case=False, na=False)].copy()
+    ambulatory_visit = encounters[encounters["ENC_TYPE"].str.contains("AV|OA", case=False, na=False)].copy()
+    hospice = encounters[encounters["DISCHARGE_STATUS"] == "HS"]
+
+    return [("encounters", encounters), ("ER", er_visit), ("IP", inpatient_visit), ("AV", ambulatory_visit), ("hospice", hospice)]
 
 
 def create_features():
