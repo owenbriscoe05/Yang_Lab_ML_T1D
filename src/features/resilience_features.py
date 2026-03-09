@@ -3,7 +3,30 @@ import pandas as pd
 data_path = "./data/raw/"
 
 def main():
-    ...
+    filtered_labs = filter_lab_data()
+    filtered_meds = filter_druglist()
+    filtered_vitals = filter_vitals()
+    filtered_procedures = filter_procedures()
+    filtered_encounters = filter_encounters()
+
+    anchors = create_patient_anchors()
+    # using specimen date of collection for labs, could change
+    windowed_labs = {}
+    for name, df in filtered_labs:
+        print(f"Defining universal window for {name}")
+        windowed_labs[name] = create_universal_window(df, anchors, "SPECIMEN_DATE_OFFSET")
+    windowed_meds = {}
+    for name, df in filtered_meds:
+        windowed_meds[name] = create_universal_window(df, anchors, "RX_START_DATE_OFFSET")
+    windowed_vitals = {}
+    for name, df in filtered_vitals:
+        windowed_vitals[name] = create_universal_window(df, anchors, "MEASURE_DATE_OFFSET")
+    windowed_procedures = {}
+    for name, df in filtered_procedures:
+        windowed_procedures[name] = create_universal_window(df, anchors, "PX_DATE_OFFSET")
+    windowed_encounters = {}
+    for name, df in filtered_encounters:
+        windowed_encounters[name] = create_universal_window(df, anchors, "ADMIT_DATE_OFFSET")
 
 
 def filter_lab_data():
@@ -109,7 +132,8 @@ def filter_vitals():
                    (vitals["SYSTOLIC"].isna() | vitals["SYSTOLIC"] == "NI")) & 
                    (vitals["ORIGINAL_BMI"].isna() | vitals["ORIGINAL_BMI"] == "NI") &
                    (vitals["SMOKING"].isna() | vitals["SMOKING"] == "NI") &
-                   (vitals["TOBACCO"].isna() | vitals["TOBACCO"] == "NI"))
+                   (vitals["TOBACCO"].isna() | vitals["TOBACCO"] == "NI") | 
+                   (vitals["MEASURE_DATE_OFFSET"].isna()))
     vitals = vitals[~vitals_mask]
 
     hypertension = vitals[(vitals["SYSTOLIC"].astype(float) > 140) | (vitals["DIASTOLIC"].astype(float) > 90)].copy()
@@ -172,6 +196,40 @@ def filter_encounters():
     hospice = encounters[encounters["DISCHARGE_STATUS"] == "HS"]
 
     return [("encounters", encounters), ("ER", er_visit), ("IP", inpatient_visit), ("AV", ambulatory_visit), ("hospice", hospice)]
+
+def create_patient_anchors():
+    reader = pd.read_csv("./data/processed/T1D_encounters_clean.csv", header=0, chunksize=500000)
+    chunks = []
+    for i, chunk in enumerate(reader):
+        chunks.append(chunk)
+        if (i%30 == 0):
+            print(f"Filtered chunk {i} of T1D_encounters_clean.csv \n")
+    encounters = pd.concat(chunks, ignore_index=True)
+
+    enc_mask = ((encounters["ADMIT_DATE_OFFSET"].isna()) & (encounters["DISCHARGE_DATE_OFFSET"].isna())) | encounters["DISCHARGE_DISPOSITION" == "E"]
+    encounters = encounters[~enc_mask]
+
+    encounters["ADMIT_DATE_OFFSET"] = pd.to_datetime(encounters["ADMIT_DATE_OFFSET"], errors="coerce")
+    anchor_dates = encounters.groupby("ID")["ADMIT_DATE_OFFSET"].min().reset_index()
+    anchor_dates.rename(columns={"ADMIT_DATE_OFFSET": "DAY_0"}, inplace=True)
+
+    return anchor_dates
+
+def create_universal_window(df, anchor_dates, date_column, window_size_days=365):
+    """Assigns time windows to specified df"""
+
+    df[date_column] = pd.to_datetime(df[date_column], errors="coerce")
+    df = df.dropna(subset=[date_column]) # might need to change
+    df = df.merge(anchor_dates, on="ID", how="left")
+    df["DAYS_SINCE_START"] = (df[date_column] - df["DAY_0"]).dt.days
+    df = df[df["DAYS_SINCE_START"] >= 0]
+
+    bins = range(0, 10000, window_size_days)
+    labels = [f"Year_{i+1}" for i in range(len(bins) - 1)]
+
+    df["TIME_WINDOW"] = pd.cut(df["DAYS_SINCE_START"], bins=bins, labels=labels, right=False)
+
+    return df
 
 
 def create_features():
