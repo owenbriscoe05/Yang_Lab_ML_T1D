@@ -17,15 +17,19 @@ def main():
         windowed_labs[name] = create_universal_window(df, anchors, "SPECIMEN_DATE_OFFSET")
     windowed_meds = {}
     for name, df in filtered_meds:
+        print(f"Defining universal window for {name}")
         windowed_meds[name] = create_universal_window(df, anchors, "RX_START_DATE_OFFSET")
     windowed_vitals = {}
     for name, df in filtered_vitals:
+        print(f"Defining universal window for {name}")
         windowed_vitals[name] = create_universal_window(df, anchors, "MEASURE_DATE_OFFSET")
     windowed_procedures = {}
     for name, df in filtered_procedures:
+        print(f"Defining universal window for {name}")
         windowed_procedures[name] = create_universal_window(df, anchors, "PX_DATE_OFFSET")
     windowed_encounters = {}
     for name, df in filtered_encounters:
+        print(f"Defining universal window for {name}")
         windowed_encounters[name] = create_universal_window(df, anchors, "ADMIT_DATE_OFFSET")
 
 
@@ -71,18 +75,35 @@ def filter_lab_data():
     return [("labs", labs), ("hba1c", hba1c), ("glucose", glucose), 
             ("agap", agap), ("creatinine", creat), ("potassium", pot), ("uacr", uacr)]
 
-def group_labs(labs: list[tuple[str, pd.DataFrame]]):
+def group_labs(windowed_labs_list):
     """group labs by ID and date to find long-term averages/st. deviations/sums/etc"""
-    hba1c = labs[1][1]
-    glucose = labs[2][1]
-    agap = labs[3][1]
-    creatine = labs[4][1]
-    potassium = labs[5][1]
-    uacr = labs[6][1]
+    grouped_results = []
+    group_cols = ["ID", "TIME_WINDOW"]
 
-    hba1c["DAILY_MEAN"] = hba1c.groupby(["ID", "SPECIMEN_DATE_OFFSET"])["RAW_RESULT"].mean()
-    glucose["DAILY_MEDIAN"] = glucose.groupby(["ID", "SPECIMEN_DATE_OFFSET"])["RAW_RESULT"].median()
-    glucose["LONGTERM_MEAN"] = ...
+    for name, df in windowed_labs_list:
+        print(f"Aggregating {name}\n")
+        routine = df[df["POC_LAB"] == 0].groupby(group_cols).agg(
+            **{
+                f"{name}_routine_mean": ("RESULT_NUM_CLEAN", "mean"),
+                f"{name}_routine_median": ("RESULT_NUM_CLEAN", "median"),
+                f"{name}_routine_std": ("RESULT_NUM_CLEAN", "std"),
+                f"{name}_routine_count": ("RESULT_NUM_CLEAN", "count")
+            }
+        ).reset_index()
+        poc = df[df["POC_LAB"] == 1].groupby(group_cols).agg(
+            **{
+                f"{name}_poc_max": ("RESULT_NUM_CLEAN", "max"),
+                f"{name}_poc_min": ("RESULT_NUM_CLEAN", "min"),
+                f"{name}_poc_mean": ("RESULT_NUM_CLEAN", "mean"),
+                f"{name}_poc_count": ("RESULT_NUM_CLEAN", "count")
+            }
+        ).reset_index()
+
+        agg_df = pd.merge(routine, poc, on=group_cols, how="outer")
+        grouped_results.append((name, agg_df))
+    
+    return grouped_results
+
 
 
 def filter_druglist():
