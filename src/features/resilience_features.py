@@ -159,10 +159,56 @@ def filter_vitals():
 
     hypertension = vitals[(vitals["SYSTOLIC"].astype(float) > 140) | (vitals["DIASTOLIC"].astype(float) > 90)].copy()
     emergency_vitals = vitals[(vitals["SYSTOLIC"].astype(float) > 180) | (vitals["DIASTOLIC"].astype(float) > 120)].copy()
+    underweight = vitals[vitals["ORIGINAL_BMI"].astype(float) < 18.5].copy()
     obesity = vitals[vitals["ORIGINAL_BMI"].astype(float) > 30].copy()
     smoker = vitals[(vitals["SMOKING"].astype(int) == 1) | (vitals["TOBACCO"].astype(int) == 1)].copy()
 
-    return [("hypertension", hypertension), ("er_vitals", emergency_vitals), ("obesity", obesity), ("smoker", smoker)]
+    return [("hypertension", hypertension), ("er_vitals", emergency_vitals), ("obesity", obesity), ("underweight", underweight), ("smoker", smoker)]
+
+def group_vitals(windowed_vitals_list):
+    """group vitals by ID and date to find long-term averages/st. deviations/sums/etc"""
+    grouped_results = []
+    group_cols = ["ID", "TIME_WINDOW"]
+
+    for name, df in windowed_vitals_list:
+        if name == "er_vitals":
+            agg_df = df.groupby(group_cols).agg(
+                # count returns the number of extreme hypertensives this patient had in the time window,
+                # while lambda just returns if they had any extreme hypertensives in this time window
+                bp_crisis_count=("ID", "count"),
+                bp_crisis_flag=("ID", lambda x: 1)
+            ).reset_index()
+        
+        elif name == "smoker":
+            agg_df = df.groupby(group_cols).agg(
+                smoker_flag=("ID", lambda x: 1)
+            ).reset_index()
+        
+        elif name == "obesity":
+            agg_df = df.groupby(group_cols).agg(
+                obesity_flag=("ID", lambda x: 1)
+            )
+        
+        elif name == "underweight":
+            agg_df = df.groupby(group_cols).agg(
+                underweight_flag=("ID", lambda x: 1)
+            )
+        
+        elif name == "hypertension":
+            df["SYSTOLIC"] = df["SYSTOLIC"].astype(float)
+            df["DIASTOLIC"] = df["DIASTOLIC"].astype(float)
+
+            agg_df = df.groupby(group_cols).agg(
+                systolic_mean=("SYSTOLIC", "mean"),
+                systolic_max=("SYSTOLIC", "max"),
+                systolic_std=("SYSTOLIC", "std"),
+                diastolic_mean=("DIASTOLIC", "mean"),
+                diastolic_max=("DIASTOLIC", "max"),
+                diastolic_std=("DIASTOLIC", "std")
+            ).reset_index()
+        grouped_results.append((name, agg_df))
+    
+    return grouped_results
 
 def filter_procedures():
     reader = pd.read_csv("./data/processed/procedures.csv", header=0, chunksize=500000)
@@ -178,7 +224,7 @@ def filter_procedures():
     procedures = [~procedures_mask]
 
     cgm_codes = ['A9276', 'A9277', 'A9278', 'K0553', 'K0554']
-    pump_codes = ['E0784', 'A9274', 'S1034']
+    pump_codes = ['E0784', 'A9274', 'S1034', 'A4224']
 
     on_cgm = procedures[procedures["PX"].isin(cgm_codes)].copy()
     on_pump = procedures[procedures["PX"].isin(pump_codes)].copy()  
@@ -188,14 +234,74 @@ def filter_procedures():
     dialysis_codes = ['90935', '90937', '90945', '90947'] + [str(x) for x in range(90951, 90971)]
     amputation_codes = ['28820', '28825', '28810', '28805', '28800', '27880', '27881', '27882', '27590', '27591', '27592']
     retinopathy_codes = ['67228', '67028']
+    # 11042-44 represent surgical debridement, 97597-8 represent wound care for debridement
+    neuropathy_codes = ['11042', '11043', '11044', '97597', '97598']
 
     icu_visits = procedures[procedures["PX"].isin(icu_codes)].copy()
     dialysis = procedures[procedures["PX"].isin(dialysis_codes)].copy()
     amputations = procedures[procedures["PX"].isin(amputation_codes)].copy()
     retinopathy_surgery = procedures[procedures["PX"].isin(retinopathy_codes)].copy()
+    neuropathy_surgery = procedures[procedures["PX"].isin(neuropathy_codes)].copy()
     
     return [("procedures", procedures), ("cgm", on_cgm), ("pump", on_pump), ("icu", icu_visits),
-            ("dialysis", dialysis), ("amputations", amputations), ("retinopathy", retinopathy_surgery)]
+            ("dialysis", dialysis), ("amputations", amputations), ("retinopathy", retinopathy_surgery),
+            ("neuropathy", neuropathy_surgery)]
+
+def group_procedures(windowed_procedures_list):
+    """group vitals by ID and date to find long-term averages/st. deviations/sums/etc"""
+    grouped_results = []
+    group_cols = ["ID", "TIME_WINDOW"]
+
+    for name, df in windowed_procedures_list:
+        if name == "icu":
+            agg_df = df.groupby(group_cols).agg(
+                # count returns the number of extreme hypertensives this patient had in the time window,
+                # while lambda just returns if they had any extreme hypertensives in this time window
+                icu_count=("ID", "count"),
+                icu_flag=("ID", lambda x: 1)
+            ).reset_index()
+        
+        elif name == "amputations":
+            agg_df = df.groupby(group_cols).agg(
+                amputation_flag=("ID", lambda x: 1)
+            ).reset_index()
+        
+        elif name == "neuropathy":
+            agg_df = df.groupby(group_cols).agg(
+                neuropathy_flag=("ID", lambda x: 1)
+            ).reset_index()
+        
+        elif name == "dialysis":
+            agg_df = df.groupby(group_cols).agg(
+                dialysis_flag=("ID", lambda x: 1)
+            ).reset_index()
+        
+        elif name == "retinopathy":
+            agg_df = df.groupby(group_cols).agg(
+                retinopathy_flag=("ID", lambda x: 1)
+            ).reset_index()
+        
+        elif name == "cgm":
+            agg_df = df.groupby(group_cols).agg(
+                cgm_count=("ID", "count"),
+                cgm_flag=("ID", lambda x: 1)
+            ).reset_index()
+        
+        elif name == "pump":
+            agg_df = df.groupby(group_cols).agg(
+                pump_count=("ID", "count"),
+                pump_flag=("ID", lambda x: 1)
+            ).reset_index()
+        
+        else:
+            agg_df = df.groupby(group_cols).agg(
+                all_px_count=("PX", "count"),
+                unique_px_days=("PX_DATE_OFFSET", "nunique"),
+                unique_px_types=("PX", "nunique")
+            ).reset_index()
+        grouped_results.append((name, agg_df))
+    
+    return grouped_results
 
 def filter_encounters():
     reader = pd.read_csv("./data/processed/T1D_encounters_clean.csv", header=0, chunksize=500000)
@@ -257,6 +363,9 @@ def create_features():
     """What the ML model actually sees needs to be tailored very carefully. We want it to discover resiliency features, not predict resilience USING resilience"""
 
 def combine():
+    ...
+
+def calculate_resilience_score(df):
     ...
 
 def pivot():
