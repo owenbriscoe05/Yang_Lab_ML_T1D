@@ -1,8 +1,12 @@
+import os
 import pandas as pd
 
 data_path = "./data/raw/"
+export_path = "./data/processed/grouped_checkpoints/"
 
 def main():
+    os.makedirs(export_path, exist_ok=True)
+
     filtered_labs = filter_lab_data()
     filtered_meds = filter_druglist()
     filtered_vitals = filter_vitals()
@@ -32,6 +36,22 @@ def main():
         print(f"Defining universal window for {name}")
         windowed_encounters[name] = create_universal_window(df, anchors, "ADMIT_DATE_OFFSET")
 
+    final_labs = group_labs(list(windowed_labs.items()))
+    final_meds = group_drugs(list(windowed_meds.items()))
+    final_vitals = group_vitals(list(windowed_vitals.items()))
+    final_procedures = group_procedures(list(windowed_procedures.items()))
+    final_encounters = group_encounters(list(windowed_encounters.items()))
+
+    print("\nInitiating Parquet Export...")
+    all_final_data = final_labs + final_meds + final_vitals + final_procedures + final_encounters
+    
+    for name, df in all_final_data:
+        # Save as Parquet to preserve the ["ID", "TIME_WINDOW"] index types perfectly
+        file_name = f"{export_path}{name}_grouped.parquet"
+        df.to_parquet(file_name, index=False)
+        print(f"Successfully exported: {file_name}")
+    
+    print("Done")
 
 def filter_lab_data():
     """Could return a list of tuples: {name, df} to help keep track of all the metrics"""
@@ -109,12 +129,16 @@ def group_labs(windowed_labs_list):
 def filter_druglist():
     """same type of tuple returned (name, df)"""
 
-    drugs = pd.read_csv("./data/processed/confounding_drugs_external.csv", header=0)
+    drugs = pd.read_csv("./data/processed/prescribed_drugs.csv", header=0)
     na_mask = (drugs["RX_START_DATE_OFFSET"].isna()) | (drugs["RX_ORDER_DATE_OFFSET"].isna()) | (drugs["RX_START_DATE_OFFSET"] == "NI") | (drugs["RX_ORDER_DATE_OFFSET"] == "NI")
     drugs = drugs[~na_mask]
     # if end date offset is NA, use date of EHR download in place
     drug_starts = pd.to_datetime(drugs["RX_START_DATE_OFFSET"], errors="coerce")
     drug_ends = pd.to_datetime(drugs["RX_END_DATE_OFFSET"], errors="coerce")
+
+    study_cutoff_date = pd.to_datetime("2023-09-28")
+    drug_ends = drug_ends.fillna(study_cutoff_date)
+
     drugs["DRUG_DURATION"] = (drug_ends - drug_starts).dt.days
 
     lisinopril = drugs[drugs["RAW_RX_MED_NAME"].str.contains("lisinopril", case=False, na=False)].copy()
@@ -137,7 +161,54 @@ def filter_druglist():
     immunosuppressants = immunosuppressants[immunosuppressants["DRUG_DURATION"] > 7]
 
     return [("drugs", drugs), ("lisinopril", lisinopril), ("losartan", losartan), ("metformin", metformin), 
-            ("ozempic", ozempic), ("cgm", cgm), ("pump", insulin_pump), ("immuno", immunosuppressants)]
+            ("ozempic", ozempic), ("cgm", cgm), ("pump", insulin_pump), ("steroids", steroids), ("immuno", immunosuppressants)]
+
+def group_drugs(windowed_meds_list):
+    grouped_results = []
+    group_cols=["ID", "TIME_WINDOW"]
+    # change if different threshold desired
+    prevalence_threshold = 0.05
+
+    for name, df in windowed_meds_list:
+        if (name == "drugs"):
+            # using prevalence threshold 5%
+            print("Identifying and grouping top drugs among prescribed meds")
+            total_patients = df["ID"].nunique()
+            patients_per_drug = df.groupby("RAW_RXNORM_CUI")["ID"].nunique()
+            min_required_patients = total_patients*prevalence_threshold
+            prevalent_drugs = patients_per_drug[patients_per_drug >= min_required_patients].index.tolist()
+            if not prevalent_drugs:
+                print("Warning: No drugs met the threshold. Returning empty dataframe.")
+                grouped_results.append((name, pd.DataFrame(columns=["ID", "TIME_WINDOW"])))
+                continue
+            filtered_df = df[df["RAW_RXNORM_CUI"].isin(prevalent_drugs)].copy()
+
+            pivot_df = pd.pivot_table(
+                filtered_df,
+                index=["ID", "TIME_WINDOW"],
+                columns="RAW_RXNORM_CUI",
+                values="DRUG_DURATION",
+                aggfunc=["sum", "count"],
+                fill_value=0
+            )
+
+            pivot_df.columns = [f"{col[1].replace(' ', '_')}_duration_{col[0]}" for col in pivot_df.columns]
+
+            grouped_results.append((name, pivot_df.reset_index()))
+        
+        else:
+            print(f"Aggregating {name}\n")
+
+            agg_df = df.groupby(group_cols).agg(
+                **{
+                    f"{name}_total_days": ("DRUG_DURATION", "sum"),
+                    f"{name}_total_prescribed": ("DRUG_DURATION", "count")
+                }
+            ).reset_index()
+
+            grouped_results.append((name, agg_df))
+    
+    return grouped_results
 
 def filter_vitals():
     reader = pd.read_csv("./data/processed/vitals.csv", header=0, chunksize=500000)
@@ -149,21 +220,23 @@ def filter_vitals():
     vitals = pd.concat(chunks, ignore_index=True)
 
     print("Applying vitals filters \n")
-    vitals_mask = (((vitals["DIASTOLIC"].isna() | vitals["DIASTOLIC"] == "NI") |
-                   (vitals["SYSTOLIC"].isna() | vitals["SYSTOLIC"] == "NI")) & 
-                   (vitals["ORIGINAL_BMI"].isna() | vitals["ORIGINAL_BMI"] == "NI") &
-                   (vitals["SMOKING"].isna() | vitals["SMOKING"] == "NI") &
-                   (vitals["TOBACCO"].isna() | vitals["TOBACCO"] == "NI") | 
-                   (vitals["MEASURE_DATE_OFFSET"].isna()))
-    vitals = vitals[~vitals_mask]
 
-    hypertension = vitals[(vitals["SYSTOLIC"].astype(float) > 140) | (vitals["DIASTOLIC"].astype(float) > 90)].copy()
-    emergency_vitals = vitals[(vitals["SYSTOLIC"].astype(float) > 180) | (vitals["DIASTOLIC"].astype(float) > 120)].copy()
-    underweight = vitals[vitals["ORIGINAL_BMI"].astype(float) < 18.5].copy()
-    obesity = vitals[vitals["ORIGINAL_BMI"].astype(float) > 30].copy()
-    smoker = vitals[(vitals["SMOKING"].astype(int) == 1) | (vitals["TOBACCO"].astype(int) == 1)].copy()
+    vitals = vitals.dropna(subset=["MEASURE_DATE_OFFSET", "SYSTOLIC", "DIASTOLIC", "ORIGINAL_BMI"])
+    vitals = vitals[(vitals["SYSTOLIC"] != "NI") & (vitals["DIASTOLIC"] != "NI") & (vitals["ORIGINAL_BMI"] != "NI")]
 
-    return [("hypertension", hypertension), ("er_vitals", emergency_vitals), ("obesity", obesity), ("underweight", underweight), ("smoker", smoker)]
+    vitals["SYSTOLIC"] = vitals["SYSTOLIC"].astype(float)
+    vitals["DIASTOLIC"] = vitals["DIASTOLIC"].astype(float)
+    vitals["ORIGINAL_BMI"] = vitals["ORIGINAL_BMI"].astype(float)
+
+    hypertension = vitals[(vitals["SYSTOLIC"] > 140) | (vitals["DIASTOLIC"] > 90)].copy()
+    emergency_vitals = vitals[(vitals["SYSTOLIC"] > 180) | (vitals["DIASTOLIC"] > 120)].copy()
+    underweight = vitals[vitals["ORIGINAL_BMI"] < 18.5].copy()
+    obesity = vitals[vitals["ORIGINAL_BMI"] > 30].copy()
+
+    smoker = vitals[(vitals["SMOKING"].astype(str).str.startswith("1")) | 
+                    (vitals["TOBACCO"].astype(str).str.startswith("1"))].copy()
+
+    return [("vitals", vitals), ("hypertension", hypertension), ("er_vitals", emergency_vitals), ("obesity", obesity), ("underweight", underweight), ("smoker", smoker)]
 
 def group_vitals(windowed_vitals_list):
     """group vitals by ID and date to find long-term averages/st. deviations/sums/etc"""
@@ -194,11 +267,14 @@ def group_vitals(windowed_vitals_list):
                 underweight_flag=("ID", lambda x: 1)
             )
         
-        elif name == "hypertension":
+        elif name == "else":
             df["SYSTOLIC"] = df["SYSTOLIC"].astype(float)
             df["DIASTOLIC"] = df["DIASTOLIC"].astype(float)
+            df["BMI"] = df["BMI"].astype(float)
 
             agg_df = df.groupby(group_cols).agg(
+                bmi_max=("BMI", "max"),
+                bmi_min=("BMI", "min"),
                 systolic_mean=("SYSTOLIC", "mean"),
                 systolic_max=("SYSTOLIC", "max"),
                 systolic_std=("SYSTOLIC", "std"),
@@ -214,14 +290,15 @@ def filter_procedures():
     reader = pd.read_csv("./data/processed/procedures.csv", header=0, chunksize=500000)
     chunks = []
     for i, chunk in enumerate(reader):
-        chunks.append(chunk)
+        procedures_mask = (chunk["PX"].isna()) | (chunk["PX"] == "NI") | (chunk["PX_DATE_OFFSET"].isna())
+        chunk_clean = procedures[~procedures_mask]
+
+        chunks.append(chunk_clean)
         if (i%30 == 0):
             print(f"Filtered chunk {i} of procedures.csv \n")
     procedures = pd.concat(chunks, ignore_index=True)
 
     print("Applying procedures filters \n")
-    procedures_mask = procedures[(procedures["PX"].isna()) | (procedures["PX"] == "NI") | (procedures["PX_DATE_OFFSET"].isna())]
-    procedures = [~procedures_mask]
 
     cgm_codes = ['A9276', 'A9277', 'A9278', 'K0553', 'K0554']
     pump_codes = ['E0784', 'A9274', 'S1034', 'A4224']
@@ -307,15 +384,15 @@ def filter_encounters():
     reader = pd.read_csv("./data/processed/T1D_encounters_clean.csv", header=0, chunksize=500000)
     chunks = []
     for i, chunk in enumerate(reader):
-        chunks.append(chunk)
+        # remove unusable data and "E" for expired (dead) patients
+        enc_mask = ((chunk["ADMIT_DATE_OFFSET"].isna()) & (chunk["DISCHARGE_DATE_OFFSET"].isna())) | (chunk["DISCHARGE_DISPOSITION"] == "E")
+        clean_chunk = encounters[~enc_mask]
+        chunks.append(clean_chunk)
         if (i%30 == 0):
             print(f"Filtered chunk {i} of T1D_encounters_clean.csv \n")
     encounters = pd.concat(chunks, ignore_index=True)
 
     print("Applying encounters filters \n")
-    # remove unusable data and "E" for expired (dead) patients
-    enc_mask = ((encounters["ADMIT_DATE_OFFSET"].isna()) & (encounters["DISCHARGE_DATE_OFFSET"].isna())) | encounters["DISCHARGE_DISPOSITION" == "E"]
-    encounters = encounters[~enc_mask]
 
     er_visit = encounters[encounters["ENC_TYPE"].str.contains("ED", case=False, na=False)].copy()
     inpatient_visit = encounters[encounters["ENC_TYPE"].str.contains("EI|IP", case=False, na=False)].copy()
@@ -323,6 +400,24 @@ def filter_encounters():
     hospice = encounters[encounters["DISCHARGE_STATUS"] == "HS"]
 
     return [("encounters", encounters), ("ER", er_visit), ("IP", inpatient_visit), ("AV", ambulatory_visit), ("hospice", hospice)]
+
+def group_encounters(windowed_encounters_list):
+    grouped_results = []
+    group_cols = ["ID", "TIME_WINDOW"]
+
+    for name, df in windowed_encounters_list:
+        if (name == "encounters"):
+            continue
+        else:
+            print(f"Aggregating {name} from encounters \n")
+            agg_df = df.groupby(group_cols).agg(
+                **{
+                    f"{name}_total_count": ("ID", "count")
+                }
+            ).reset_index()
+        grouped_results.append((name, agg_df))
+
+    return grouped_results
 
 def create_patient_anchors():
     reader = pd.read_csv("./data/processed/T1D_encounters_clean.csv", header=0, chunksize=500000)
@@ -333,7 +428,7 @@ def create_patient_anchors():
             print(f"Filtered chunk {i} of T1D_encounters_clean.csv \n")
     encounters = pd.concat(chunks, ignore_index=True)
 
-    enc_mask = ((encounters["ADMIT_DATE_OFFSET"].isna()) & (encounters["DISCHARGE_DATE_OFFSET"].isna())) | encounters["DISCHARGE_DISPOSITION" == "E"]
+    enc_mask = ((encounters["ADMIT_DATE_OFFSET"].isna()) & (encounters["DISCHARGE_DATE_OFFSET"].isna())) | (encounters["DISCHARGE_DISPOSITION"] == "E")
     encounters = encounters[~enc_mask]
 
     encounters["ADMIT_DATE_OFFSET"] = pd.to_datetime(encounters["ADMIT_DATE_OFFSET"], errors="coerce")
@@ -361,15 +456,6 @@ def create_universal_window(df, anchor_dates, date_column, window_size_days=365)
 
 def create_features():
     """What the ML model actually sees needs to be tailored very carefully. We want it to discover resiliency features, not predict resilience USING resilience"""
-
-def combine():
-    ...
-
-def calculate_resilience_score(df):
-    ...
-
-def pivot():
-    ...
 
 
 if __name__ == "__main__":
