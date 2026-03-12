@@ -183,6 +183,8 @@ def group_drugs(windowed_meds_list):
                 continue
             filtered_df = df[df["RAW_RXNORM_CUI"].isin(prevalent_drugs)].copy()
 
+            filtered_df["RAW_RXNORM_CUI"] = filtered_df["RAW_RXNORM_CUI"].astype(str)
+
             pivot_df = pd.pivot_table(
                 filtered_df,
                 index=["ID", "TIME_WINDOW"],
@@ -291,7 +293,7 @@ def filter_procedures():
     chunks = []
     for i, chunk in enumerate(reader):
         procedures_mask = (chunk["PX"].isna()) | (chunk["PX"] == "NI") | (chunk["PX_DATE_OFFSET"].isna())
-        chunk_clean = procedures[~procedures_mask]
+        chunk_clean = chunk[~procedures_mask]
 
         chunks.append(chunk_clean)
         if (i%30 == 0):
@@ -386,7 +388,7 @@ def filter_encounters():
     for i, chunk in enumerate(reader):
         # remove unusable data and "E" for expired (dead) patients
         enc_mask = ((chunk["ADMIT_DATE_OFFSET"].isna()) & (chunk["DISCHARGE_DATE_OFFSET"].isna())) | (chunk["DISCHARGE_DISPOSITION"] == "E")
-        clean_chunk = encounters[~enc_mask]
+        clean_chunk = chunk[~enc_mask]
         chunks.append(clean_chunk)
         if (i%30 == 0):
             print(f"Filtered chunk {i} of T1D_encounters_clean.csv \n")
