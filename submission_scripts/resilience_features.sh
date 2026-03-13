@@ -1,12 +1,11 @@
-#!/bin/bash
-#SBATCH --job-name=t1d_features
-#SBATCH --output=job_logs/features_%j.out   # Standard output log
-#SBATCH --error=job_logs/features_%j.err    # Standard error log
-#SBATCH --nodes=1                           # Request 1 node
-#SBATCH --ntasks=1                          # Request 1 task
-#SBATCH --cpus-per-task=4                   
-#SBATCH --mem=100G                          
-#SBATCH --time=04:00:00                     
+#!/bin/bash -l
+#$ -N t1d_features
+#$ -cwd
+#$ -o job_logs/features_$JOB_ID.out
+#$ -e job_logs/features_$JOB_ID.err
+#$ -l h_rt=04:00:00
+#$ -pe shared 2
+#$ -l h_data=50G                 
 
 echo "Starting T1D Feature Engineering Pipeline..."
 
@@ -24,7 +23,6 @@ source clean_env/bin/activate
 
 echo "Environment activated."
 
-# 5. Execute the Python script
 python ./src/features/resilience_features.py
 
 echo "Pipeline complete."

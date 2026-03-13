@@ -262,21 +262,20 @@ def group_vitals(windowed_vitals_list):
         elif name == "obesity":
             agg_df = df.groupby(group_cols).agg(
                 obesity_flag=("ID", lambda x: 1)
-            )
+            ).reset_index()
         
         elif name == "underweight":
             agg_df = df.groupby(group_cols).agg(
                 underweight_flag=("ID", lambda x: 1)
-            )
+            ).reset_index()
         
-        elif name == "else":
+        else:
             df["SYSTOLIC"] = df["SYSTOLIC"].astype(float)
             df["DIASTOLIC"] = df["DIASTOLIC"].astype(float)
-            df["BMI"] = df["BMI"].astype(float)
 
             agg_df = df.groupby(group_cols).agg(
-                bmi_max=("BMI", "max"),
-                bmi_min=("BMI", "min"),
+                bmi_max=("ORIGINAL_BMI", "max"),
+                bmi_min=("ORIGINAL_BMI", "min"),
                 systolic_mean=("SYSTOLIC", "mean"),
                 systolic_max=("SYSTOLIC", "max"),
                 systolic_std=("SYSTOLIC", "std"),
@@ -327,18 +326,18 @@ def filter_procedures():
             ("neuropathy", neuropathy_surgery)]
 
 def group_procedures(windowed_procedures_list):
-    """group vitals by ID and date to find long-term averages/st. deviations/sums/etc"""
+    """group procedures by ID and date to find long-term averages/st. deviations/sums/etc"""
     grouped_results = []
     group_cols = ["ID", "TIME_WINDOW"]
 
     for name, df in windowed_procedures_list:
         if name == "icu":
             agg_df = df.groupby(group_cols).agg(
-                # count returns the number of extreme hypertensives this patient had in the time window,
-                # while lambda just returns if they had any extreme hypertensives in this time window
+                # count returns the number of icu visits this patient had in the time window,
+                # while lambda just returns if they had ANY icu visits in this time window
                 icu_count=("ID", "count"),
                 icu_flag=("ID", lambda x: 1)
-            ).reset_index()
+            ).reset_inex()
         
         elif name == "amputations":
             agg_df = df.groupby(group_cols).agg(
